@@ -12,7 +12,7 @@ from sqlalchemy.pool import StaticPool
 from app import config
 from app.db import get_db
 from app.main import app
-from app.models import Base, DkimKey, DkimSigning, SentMail
+from app.models import Base, DkimKey, DkimSigning, Domain, SentMail
 
 
 def _script(path: Path, body: str) -> str:
@@ -38,7 +38,13 @@ fi
 '''),
         POSTSUPER=_script(bins / "postsuper",
                               f'printf "%s\\n" "$@" > {out}/ps_argv\necho "postsuper: Deleted: 1 message" >&2\n'),
-        DIG=_script(bins / "dig", 'echo \'"v=DKIM1; k=rsa; " "p=MIIBIjAN"\'\n'),
+        DIG=_script(bins / "dig", '''
+case "$3" in
+  _dmarc.*) echo '"v=DMARC1; p=none; adkim=r; aspf=r"' ;;
+  *._domainkey.*) ;;  # DKIM key not published yet
+  *) echo '"v=spf1 include:spf.metrovps.art " "~all"' ;;  # long records come split
+esac
+'''),
         JOURNALCTL=_script(bins / "journalctl", '''
 case "$*" in
   *message-id=*) echo "4F9D3C2A1B: message-id=<abc.123@example.com>" ;;
@@ -142,23 +148,40 @@ def test_queue_list_and_actions(env):
     assert client.delete("/queue/..%2Fx").status_code in (404, 405, 422)
 
 
-def test_dkim_add_and_dns(env):
+def test_add_domain_and_check_dns(env):
     client, out, db = env
-    r = client.post("/dkim/domains", json={"domain": "New.com", "selector": "s2"})
+    r = client.post("/domains", json={"domain": "New.com", "selector": "s2"})
     assert r.status_code == 201, r.text
-    assert r.json()["dns_name"] == "s2._domainkey.new.com"
+    body = r.json()
+    assert body["name"] == "new.com"
+
+    # OpenDKIM's tables got the key and the signing rows
     key = db.get(DkimKey, "s2._domainkey.new.com")
     assert (key.domain, key.selector) == ("new.com", "s2")
     assert key.private_key.startswith("-----BEGIN PRIVATE KEY-----")
-    assert r.json()["dns_value"] == "v=DKIM1; k=rsa; p=" + "".join(key.public_key.splitlines()[1:-1])
     authors = db.scalars(select(DkimSigning.author).where(DkimSigning.key_id == key.key_id)).all()
     assert sorted(authors) == ["*@new.com", "@new.com", "new.com"]
 
-    assert client.post("/dkim/domains", json={"domain": "dup.com"}).status_code == 409
+    # domains / dns_records got the three records to publish
+    dkim_value = "v=DKIM1; k=rsa; p=" + "".join(key.public_key.splitlines()[1:-1])
+    assert [(x["type"], x["name"], x["fqdn"], x["value"]) for x in body["records"]] == [
+        ("TXT", "@", "new.com", "v=spf1 include:spf.metrovps.art ~all"),
+        ("TXT", "_dmarc", "_dmarc.new.com", "v=DMARC1; p=none; adkim=r; aspf=r"),
+        ("TXT", "s2._domainkey", "s2._domainkey.new.com", dkim_value),
+    ]
+    assert db.scalar(select(Domain).where(Domain.name == "new.com")) is not None
+    assert client.get("/domains").json()[0]["name"] == "new.com"
+    assert client.get("/domains/NEW.com").json() == body
+
+    # same domain again, or a key that already exists in dkim_keys -> 409, nothing half-written
+    assert client.post("/domains", json={"domain": "new.com", "selector": "s2"}).status_code == 409
+    assert client.post("/domains", json={"domain": "dup.com"}).status_code == 409
+    assert db.scalar(select(Domain).where(Domain.name == "dup.com")) is None
+
     # bad input never reaches the DB
-    r = client.post("/dkim/domains", json={"domain": "x.com'); DROP TABLE dkim_keys;--"})
+    r = client.post("/domains", json={"domain": "x.com'); DROP TABLE dkim_keys;--"})
     assert r.status_code == 422
 
-    r = client.get("/dkim/domains/example.com/dns")
-    assert r.json()["published"] is True
-    assert r.json()["record"] == "v=DKIM1; k=rsa; p=MIIBIjAN"
+    checks = {c["fqdn"]: c["published"] for c in client.get("/domains/new.com/dns").json()}
+    assert checks == {"new.com": True, "_dmarc.new.com": True, "s2._domainkey.new.com": False}
+    assert client.get("/domains/nope.com/dns").status_code == 404

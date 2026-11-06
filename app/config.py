@@ -1,8 +1,18 @@
-"""Settings. Values come from env vars (run.sh loads them from .env)."""
+"""Settings, from env vars. A .env file in the project root is loaded too
+(for the app and for alembic); real env vars win over it."""
 
 import os
+from pathlib import Path
 
-# Command-line tools
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+
+# In Docker the tools are the host's: commands run in the host's namespaces via nsenter
+# (needs `pid: host` + `privileged: true`, see docker-compose.yml).
+HOST_PREFIX = ["nsenter", "-t", "1", "-m", "-u", "-i", "-n", "-p", "--"] if os.environ.get("RUN_ON_HOST") else []
+
+# Command-line tools (paths on the host)
 SENDMAIL = "/usr/sbin/sendmail"
 POSTQUEUE = "/usr/sbin/postqueue"
 POSTSUPER = "/usr/sbin/postsuper"  # needs root
@@ -14,10 +24,11 @@ SYSTEMCTL = "/usr/bin/systemctl"
 # Only these From: domains may send (comma separated). Empty = any.
 ALLOWED_FROM_DOMAINS = [d.strip().lower() for d in os.environ.get("ALLOWED_FROM_DOMAINS", "").split(",") if d.strip()]
 
+# DNS records every new domain must publish (besides its DKIM key)
+SPF_RECORD = os.environ.get("SPF_RECORD", "v=spf1 include:spf.metrovps.art ~all")
+DMARC_RECORD = os.environ.get("DMARC_RECORD", "v=DMARC1; p=none; adkim=r; aspf=r")
+
 # Central MySQL DB (the one OpenDKIM reads)
-DB_HOST = os.environ.get("DB_HOST", "localhost")
-DB_PORT = int(os.environ.get("DB_PORT", "3306"))
-DB_NAME = os.environ.get("DB_NAME", "")
-DB_USER = os.environ.get("DB_USER", "")
-DB_PASSWORD = os.environ.get("DB_PASSWORD", "")
+# e.g. mysql+pymysql://user:password@host:3306/dbname (URL-encode special characters in the password)
+DATABASE_URL = os.environ["DATABASE_URL"]
 DB_SSL_CA = os.environ.get("DB_SSL_CA", "")  # optional: check the server cert against this CA

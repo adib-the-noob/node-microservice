@@ -7,16 +7,16 @@ import socket
 from email.policy import SMTP
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from . import config
 from .db import get_db
 from .mail import build_message, delivery_status, make_dkim_key
-from .models import DkimKey, DkimSigning, SentMail
-from .schemas import DkimRecord, DnsCheck, DomainIn, MailIn, MailQueued
-from .utils import DOMAIN, MESSAGE_ID, QUEUE_ID, SELECTOR, check, run
+from .models import DkimKey, DkimSigning, DnsRecord, Domain, SentMail
+from .schemas import DnsCheck, DomainIn, DomainOut, MailIn, MailQueued
+from .utils import MESSAGE_ID, QUEUE_ID, check, run
 
 log = logging.getLogger("uvicorn.error")
 router = APIRouter()
@@ -102,31 +102,59 @@ def queue_delete(queue_id: str):
     return queue_action(queue_id, "delete")
 
 
-# ---- DKIM ------------------------------------------------------------------
+# ---- domains ---------------------------------------------------------------
 
-@router.post("/dkim/domains", status_code=201, response_model=DkimRecord)
-def dkim_add(req: DomainIn, db: Session = Depends(get_db)):
-    """Make a key, store it in the central DB, return the DNS record to publish."""
+@router.post("/domains", status_code=201, response_model=DomainOut)
+def add_domain(req: DomainIn, db: Session = Depends(get_db)):
+    """Make a DKIM key, store it for OpenDKIM, and register the domain with the
+    DNS records its owner must publish."""
     key_id = f"{req.selector}._domainkey.{req.domain}"
     private_pem, public_pem = make_dkim_key()
+    p = "".join(public_pem.splitlines()[1:-1])
+
+    # OpenDKIM's tables: rows are only added here, never changed.
     db.add(DkimKey(key_id=key_id, domain=req.domain, selector=req.selector,
                    private_key=private_pem, public_key=public_pem))
     db.add_all(DkimSigning(author=a, key_id=key_id) for a in (f"@{req.domain}", req.domain, f"*@{req.domain}"))
+
+    domain = Domain(name=req.domain, selector=req.selector, records=[
+        DnsRecord(type="TXT", name="@", value=config.SPF_RECORD),
+        DnsRecord(type="TXT", name="_dmarc", value=config.DMARC_RECORD),
+        DnsRecord(type="TXT", name=f"{req.selector}._domainkey", value=f"v=DKIM1; k=rsa; p={p}"),
+    ])
+    db.add(domain)
     try:
-        db.commit()
+        db.commit()  # all or nothing
     except IntegrityError:
         db.rollback()
-        raise HTTPException(409, f"{key_id} already exists")
-    p = "".join(public_pem.splitlines()[1:-1])
-    return DkimRecord(dns_name=key_id, dns_value=f"v=DKIM1; k=rsa; p={p}")
+        raise HTTPException(409, f"{req.domain} (or {key_id}) already exists")
+    return domain
 
 
-@router.get("/dkim/domains/{domain}/dns", response_model=DnsCheck)
-def dkim_dns(domain: str, selector: str = "s1"):
-    """Is the public key published? (`dig +short TXT SELECTOR._domainkey.DOMAIN`)"""
-    name = f"{check(SELECTOR, selector, 'selector')}._domainkey.{check(DOMAIN, domain.lower(), 'domain')}"
-    for line in run(config.DIG, "+short", "TXT", name).splitlines():
-        record = "".join(re.findall(r'"((?:[^"\\]|\\.)*)"', line))  # long records come split: "a" "b"
-        if "v=DKIM1" in record:
-            return DnsCheck(dns_name=name, published=True, record=record)
-    return DnsCheck(dns_name=name, published=False, record=None)
+@router.get("/domains", response_model=list[DomainOut])
+def list_domains(db: Session = Depends(get_db)):
+    return db.scalars(select(Domain).order_by(Domain.name)).all()
+
+
+@router.get("/domains/{name}", response_model=DomainOut)
+def get_domain(name: str, db: Session = Depends(get_db)):
+    return find_domain(db, name)
+
+
+@router.get("/domains/{name}/dns", response_model=list[DnsCheck])
+def check_dns(name: str, db: Session = Depends(get_db)):
+    """Is each record published? (`dig +short TXT <fqdn>` per record)"""
+    checks = []
+    for rec in find_domain(db, name).records:
+        found = ["".join(re.findall(r'"((?:[^"\\]|\\.)*)"', line))  # long records come split: "a" "b"
+                 for line in run(config.DIG, "+short", rec.type, rec.fqdn).splitlines()]
+        checks.append(DnsCheck(type=rec.type, fqdn=rec.fqdn, expected=rec.value, found=found,
+                               published=rec.value in found))
+    return checks
+
+
+def find_domain(db: Session, name: str) -> Domain:
+    domain = db.scalar(select(Domain).where(Domain.name == name.strip().lower()))
+    if domain is None:
+        raise HTTPException(404, f"unknown domain: {name}")
+    return domain

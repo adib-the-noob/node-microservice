@@ -1,6 +1,8 @@
 """Request and response bodies. Validation errors become 422 responses."""
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from datetime import datetime
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .utils import DOMAIN, EMAIL, HEADER_NAME, SELECTOR
 
@@ -83,7 +85,7 @@ class MailQueued(BaseModel):
     recipients: int
 
 
-# ---- DKIM ------------------------------------------------------------------
+# ---- domains ---------------------------------------------------------------
 
 class DomainIn(BaseModel):
     domain: str
@@ -105,12 +107,27 @@ class DomainIn(BaseModel):
         return v
 
 
-class DkimRecord(BaseModel):
-    dns_name: str
-    dns_value: str
+class DnsRecordOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    type: str
+    name: str  # host, relative to the domain ("@", "_dmarc", "s1._domainkey")
+    fqdn: str
+    value: str
+
+
+class DomainOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    name: str
+    selector: str
+    created_at: datetime | None
+    records: list[DnsRecordOut]
 
 
 class DnsCheck(BaseModel):
-    dns_name: str
+    type: str
+    fqdn: str
+    expected: str
+    found: list[str]  # TXT values currently in DNS
     published: bool
-    record: str | None

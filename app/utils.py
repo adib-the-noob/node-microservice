@@ -6,6 +6,8 @@ import subprocess
 
 from fastapi import HTTPException
 
+from . import config
+
 # Postfix tools treat a leading "-" as an option, and postsuper treats "ALL" as every message.
 DOMAIN = re.compile(r"(?:(?!-)[a-z0-9-]{1,63}(?<!-)\.)+[a-z]{2,63}")
 SELECTOR = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?")
@@ -25,7 +27,7 @@ def check(pattern: re.Pattern, value: str, what: str) -> str:
 def run(*argv: str, stdin: bytes | None = None, ok: tuple[int, ...] = (0,)) -> str:
     """Run a command (argv list, never a shell). Returns stdout + stderr."""
     try:
-        p = subprocess.run(argv, input=stdin, capture_output=True, timeout=30)
+        p = subprocess.run([*config.HOST_PREFIX, *argv], input=stdin, capture_output=True, timeout=30)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise HTTPException(502, f"{argv[0]}: {exc}")
     out = (p.stdout + p.stderr).decode(errors="replace").strip()

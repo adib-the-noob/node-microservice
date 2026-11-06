@@ -13,8 +13,10 @@ shell, an argument list only, and every input checked first.
 | `POST /queue/{id}/flush` | `postqueue -i ID` |
 | `POST /queue/{id}/hold\|release\|requeue` | `postsuper -h\|-H\|-r ID` |
 | `DELETE /queue/{id}` | `postsuper -d ID` |
-| `POST /dkim/domains` | `openssl genrsa 2048`, then INSERT into `dkim_keys` + `dkim_signing` |
-| `GET /dkim/domains/{domain}/dns` | `dig +short TXT s1._domainkey.DOMAIN` |
+| `POST /domains` | `openssl genrsa 2048`, then INSERT into `dkim_keys` + `dkim_signing` + `domains` + `dns_records` |
+| `GET /domains` | list domains with their DNS records |
+| `GET /domains/{domain}` | one domain with its DNS records |
+| `GET /domains/{domain}/dns` | `dig +short TXT <fqdn>` for each record: is it published? |
 | `GET /healthz` | `systemctl is-active postfix opendkim` + `SELECT 1` on the DB |
 
 Interactive docs: `http://<host>:8025/docs`.
@@ -48,8 +50,12 @@ curl -s "$API/mail/1730...@example.com"
 # -> {"queue_id":"4F9D3C2A1B","status":"sent","dkim":{"signed":true,"selector":"s1","domain":"example.com"},"recipients":[...],"log":[...]}
 
 # onboard a new sending domain, then publish the returned TXT record
-curl -s -X POST $API/dkim/domains -d '{"domain":"example.org","selector":"s1"}' -H 'Content-Type: application/json'
-curl -s $API/dkim/domains/example.org/dns
+curl -s -X POST $API/domains -d '{"domain":"example.org","selector":"s1"}' -H 'Content-Type: application/json'
+# -> 201 {"name":"example.org","selector":"s1","created_at":"...","records":[
+#      {"type":"TXT","name":"@","fqdn":"example.org","value":"v=spf1 include:spf.metrovps.art ~all"},
+#      {"type":"TXT","name":"_dmarc","fqdn":"_dmarc.example.org","value":"v=DMARC1; p=none; adkim=r; aspf=r"},
+#      {"type":"TXT","name":"s1._domainkey","fqdn":"s1._domainkey.example.org","value":"v=DKIM1; k=rsa; p=MIIB..."}]}
+curl -s $API/domains/example.org/dns   # published: true/false per record
 
 # queue
 curl -s $API/queue
@@ -63,30 +69,55 @@ split into several quoted strings.
 ## Run (on the mail VM, after the provisioning playbook has run)
 
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sudo env UV_INSTALL_DIR=/usr/local/bin sh   # once, so root can find uv
-cp .env.example .env && nano .env                      # DB credentials
-sudo ./run.sh
+cp .env.example .env && nano .env      # DB credentials
+docker compose up -d --build
 curl -s http://127.0.0.1:8025/healthz
+docker compose logs -f                 # logs
 ```
 
-It runs as root because `postsuper` and reading the journal need it.
-Settings live in `.env` (see `.env.example`); binary paths are constants at
+The container drives the **host's** Postfix and OpenDKIM. Every command
+(`sendmail`, `postqueue`, `postsuper`, `journalctl`, `systemctl`, `dig`,
+`openssl`) runs in the host's namespaces via `nsenter -t 1`. That's why
+`docker-compose.yml` uses `pid: host`, `uts: host` and `privileged: true`. The container is
+effectively root on the VM, the same as running the app as root directly.
+
+The API is published on `0.0.0.0:${PORT}` (default 8025). Docker's port rules
+go **around ufw**, so the port is open to anyone the cloud provider's firewall lets
+through.
+
+Without Docker: `sudo ./run.sh` (needs `uv` on the host).
+
+Settings live in `.env` (see `.env.example`); binary paths are constants in
 `app/config.py`.
 
 **There is no authentication**: anyone who can reach the port can send mail,
-delete queued mail and add DKIM keys. If the gateway calls it over the network,
-set `HOST` to the private IP and firewall the port to the gateway only, e.g.
-`ufw allow from <gateway_ip> to any port 8025 proto tcp`.
+delete queued mail and add DKIM keys. Limit port 8025 in the cloud provider's
+firewall / security group to the IPs that need it (e.g. the gateway). To publish
+on one interface only, use `"<private-ip>:8025:8025"` in `docker-compose.yml`.
 
 ## Database
 
 Every node uses the central MySQL DB that OpenDKIM reads (SQLAlchemy + PyMySQL, always TLS).
-The DB user needs INSERT on `dkim_keys`, `dkim_signing` and `sent_mail`, and
-CREATE for the first start, so use `dkim_admin`, not `opendkim_ro`.
+The app and alembic both connect with `DATABASE_URL` from `.env`, e.g.
+`mysql+pymysql://dkim_admin:PASSWORD@host:23356/defaultdb`. URL-encode special characters
+in the password (`@` → `%40`, `:` → `%3A`, `/` → `%2F`).
+The DB user needs INSERT on `dkim_keys`, `dkim_signing`, `domains`, `dns_records`
+and `sent_mail`, SELECT on `domains` / `dns_records`, and CREATE/ALTER for migrations, so use `dkim_admin`, not `opendkim_ro`.
 
-- `dkim_keys`, `dkim_signing`: already exist. `POST /dkim/domains` adds one key
-  and the signing rows `@D`, `D`, `*@D`. A key that already exists returns 409.
-- `sent_mail`: created at startup if missing. There is one row per message sent through the API:
+- `dkim_keys`, `dkim_signing`: OpenDKIM's tables, which already exist. The app never alters them.
+  `POST /domains` only adds one key and the signing rows `@D`, `D`, `*@D`.
+- `domains` (`id`, `name` unique, `selector`, `created_at`): made by migrations.
+  There is one row per domain added through `POST /domains`. A domain or key that already exists returns
+  409, and nothing is written (one transaction).
+- `dns_records` (`id`, `domain_id` → `domains.id`, `type`, `name`, `value`): made by migrations.
+  These are the records each domain must publish. `name` is relative to the domain:
+
+  | type | name | value |
+  |---|---|---|
+  | TXT | `@` | `v=spf1 include:spf.metrovps.art ~all` (`SPF_RECORD`) |
+  | TXT | `_dmarc` | `v=DMARC1; p=none; adkim=r; aspf=r` (`DMARC_RECORD`) |
+  | TXT | `s1._domainkey` | `v=DKIM1; k=rsa; p=…` |
+- `sent_mail`: made by migrations. There is one row per message sent through the API:
 
   | column | type |
   |---|---|
@@ -99,23 +130,47 @@ CREATE for the first start, so use `dkim_admin`, not `opendkim_ro`.
 
   Delivery status is still read from each node's journal (`GET /mail/{id}` on the `node`).
 
+## Migrations (Alembic)
+
+`docker compose up` and `run.sh` run `alembic upgrade head` before starting the
+app. Nodes take a MySQL lock (`GET_LOCK`) first, so when several start at once
+only one migrates at a time.
+
+Migrations never touch `dkim_keys` / `dkim_signing`, or any table not in
+`app/models.py` (see `include_object` in `app/models.py`). The first
+migration (`0001`) creates each table only if it's missing, so DBs where the
+app already made them upgrade cleanly.
+
+To change a table, edit `app/models.py`, then:
+
+```bash
+uv run alembic revision --autogenerate -m "add x"   # review the file in migrations/versions/
+uv run alembic upgrade head                         # or just restart: it runs on startup
+```
+
+Other commands: `uv run alembic current`, `uv run alembic history`, `uv run alembic downgrade -1`.
+Inside the container: `docker compose exec mail-sidecar alembic current`.
+
 ## Code layout
 
 | File | What's in it |
 |---|---|
-| `app/main.py` | the FastAPI app; creates `sent_mail` at startup |
+| `app/main.py` | the FastAPI app |
+| `alembic.ini`, `migrations/` | Alembic migrations for `domains`, `dns_records`, `sent_mail` |
 | `app/routes.py` | all HTTP routes |
 | `app/schemas.py` | request/response bodies and their validation |
-| `app/models.py` | SQLAlchemy tables: `dkim_keys`, `dkim_signing`, `sent_mail` |
+| `app/models.py` | SQLAlchemy tables: `dkim_keys`, `dkim_signing`, `domains`, `dns_records`, `sent_mail` |
 | `app/db.py` | engine, session, `get_db` dependency |
 | `app/mail.py` | building the MIME message, journal status lookup, DKIM key generation |
 | `app/utils.py` | `run()` for commands, `check()` and regexes for inputs |
 | `app/config.py` | settings from env, binary paths |
+| `Dockerfile`, `docker-compose.yml` | the container (runs commands on the host via `nsenter`) |
 
 ## Develop
 
 ```bash
 uv sync
-uv run pytest            # fake sendmail/postqueue/... scripts, SQLite instead of MySQL
-./run.sh                 # needs a reachable DB (startup creates sent_mail)
+uv run pytest            # fake sendmail/postqueue/... scripts, SQLite instead of MySQL;
+                         # also checks the migrations match app/models.py
+./run.sh                 # needs a reachable DB (runs migrations first)
 ```

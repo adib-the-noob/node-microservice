@@ -1,0 +1,15 @@
+services:
+  mail-sidecar:
+    build: .
+    env_file: .env
+    environment:
+      RUN_ON_HOST: "1"   # run sendmail/postqueue/postsuper/journalctl/... on the host
+      HOST: 0.0.0.0      # inside the container; the published port below decides who can reach it
+    ports:
+      - "${PORT:-8025}:${PORT:-8025}"
+    # The app drives the host's Postfix + OpenDKIM: nsenter into PID 1 needs the
+    # host's process namespace. uts: host keeps the VM's hostname (sent_mail.node).
+    pid: host
+    uts: host
+    privileged: true
+    restart: unless-stopped

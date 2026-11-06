@@ -2,20 +2,24 @@
 
 import ssl
 
-from sqlalchemy import URL, create_engine
+from sqlalchemy import create_engine, make_url
 from sqlalchemy.orm import sessionmaker
 
 from . import config
 
-tls = ssl.create_default_context(cafile=config.DB_SSL_CA or None)
-if not config.DB_SSL_CA:  # encrypt, but don't check the cert (like mysql --ssl-mode=REQUIRED)
-    tls.check_hostname = False
-    tls.verify_mode = ssl.CERT_NONE
+url = make_url(config.DATABASE_URL)
+connect_args = {}
+if url.get_backend_name() == "mysql":
+    url = url.set(drivername="mysql+pymysql")  # plain mysql:// would need the MySQLdb C driver
+    tls = ssl.create_default_context(cafile=config.DB_SSL_CA or None)
+    if not config.DB_SSL_CA:  # encrypt, but don't check the cert (like mysql --ssl-mode=REQUIRED)
+        tls.check_hostname = False
+        tls.verify_mode = ssl.CERT_NONE
+    connect_args = {"ssl": tls, "connect_timeout": 10}
 
 engine = create_engine(
-    URL.create("mysql+pymysql", username=config.DB_USER, password=config.DB_PASSWORD,
-               host=config.DB_HOST, port=config.DB_PORT, database=config.DB_NAME),
-    connect_args={"ssl": tls, "connect_timeout": 10},
+    url,
+    connect_args=connect_args,
     pool_pre_ping=True,  # drop connections the server closed while idle
     pool_recycle=3600,
 )
