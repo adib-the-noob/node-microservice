@@ -104,8 +104,11 @@ in the password (`@` → `%40`, `:` → `%3A`, `/` → `%2F`).
 The DB user needs INSERT on `dkim_keys`, `dkim_signing`, `domains`, `dns_records`
 and `sent_mail`, SELECT on `domains` / `dns_records`, and CREATE/ALTER for migrations, so use `dkim_admin`, not `opendkim_ro`.
 
-- `dkim_keys`, `dkim_signing`: OpenDKIM's tables, which already exist. The app never alters them.
-  `POST /domains` only adds one key and the signing rows `@D`, `D`, `*@D`.
+- `dkim_keys` (`key_id` PK, `domain`, `selector`, `private_key`, `public_key`, `created_at`,
+  unique `domain`+`selector`) and `dkim_signing` (`author` PK, `key_id` → `dkim_keys.key_id`
+  ON DELETE CASCADE): OpenDKIM's tables. Migration `0002` creates them only on a fresh DB.
+  Existing ones are never altered, and downgrade never drops them. `POST /domains` only
+  adds one key and the signing rows `@D`, `D`, `*@D`.
 - `domains` (`id`, `name` unique, `selector`, `created_at`): made by migrations.
   There is one row per domain added through `POST /domains`. A domain or key that already exists returns
   409, and nothing is written (one transaction).
@@ -136,10 +139,10 @@ and `sent_mail`, SELECT on `domains` / `dns_records`, and CREATE/ALTER for migra
 app. Nodes take a MySQL lock (`GET_LOCK`) first, so when several start at once
 only one migrates at a time.
 
-Migrations never touch `dkim_keys` / `dkim_signing`, or any table not in
-`app/models.py` (see `include_object` in `app/models.py`). The first
-migration (`0001`) creates each table only if it's missing, so DBs where the
-app already made them upgrade cleanly.
+Migrations only create `dkim_keys` / `dkim_signing` when they're missing (`0002`).
+They never alter or drop them, and autogenerate ignores them, as it does any table not in
+`app/models.py` (see `include_object` in `app/models.py`). `0001` and `0002` create each
+table only if it's missing, so existing DBs upgrade cleanly.
 
 To change a table, edit `app/models.py`, then:
 

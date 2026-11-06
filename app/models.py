@@ -1,13 +1,13 @@
 """Tables in the central DB.
 
-dkim_keys and dkim_signing already exist (OpenDKIM reads them) and are never
-altered. This app creates domains, dns_records and sent_mail.
+dkim_keys and dkim_signing are OpenDKIM's tables. Migration 0002 creates them on a
+fresh DB; existing ones are never altered or dropped. The app's own tables are
+domains, dns_records and sent_mail.
 """
 
 from datetime import datetime
 
-from sqlalchemy import TIMESTAMP, ForeignKey, String, Text, UniqueConstraint, text
-from sqlalchemy.dialects.mysql import MEDIUMTEXT
+from sqlalchemy import TIMESTAMP, ForeignKey, Index, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -18,19 +18,24 @@ class Base(DeclarativeBase):
 class DkimKey(Base):
     __tablename__ = "dkim_keys"
 
-    key_id: Mapped[str] = mapped_column(String(255), primary_key=True)  # SELECTOR._domainkey.DOMAIN
-    domain: Mapped[str] = mapped_column(String(255))
-    selector: Mapped[str] = mapped_column(String(63))
-    private_key: Mapped[str] = mapped_column(Text().with_variant(MEDIUMTEXT, "mysql"))
-    public_key: Mapped[str] = mapped_column(Text)
+    __table_args__ = (UniqueConstraint("domain", "selector", name="uq_domain_selector"),)
+
+    key_id: Mapped[str] = mapped_column(String(320), primary_key=True)  # s1._domainkey.unifyed.tech
+    domain: Mapped[str] = mapped_column(String(253))  # unifyed.tech
+    selector: Mapped[str] = mapped_column(String(63))  # s1
+    private_key: Mapped[str] = mapped_column(Text)  # full PEM
+    public_key: Mapped[str] = mapped_column(Text)  # PEM public key
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, server_default=text("CURRENT_TIMESTAMP"))
 
 
 class DkimSigning(Base):
     """OpenDKIM signs mail whose From: matches `author` with key `key_id`."""
     __tablename__ = "dkim_signing"
+    __table_args__ = (Index("idx_key_id", "key_id"),)
 
-    author: Mapped[str] = mapped_column(String(255), primary_key=True)
-    key_id: Mapped[str] = mapped_column(String(255))
+    author: Mapped[str] = mapped_column(String(255), primary_key=True)  # unifyed.tech, @unifyed.tech, *@unifyed.tech
+    key_id: Mapped[str] = mapped_column(
+        String(320), ForeignKey("dkim_keys.key_id", name="fk_signing_key", ondelete="CASCADE"))
 
 
 class Domain(Base):
