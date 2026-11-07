@@ -23,6 +23,19 @@ def one_line(value: str) -> str:
     return value
 
 
+# ---- nodes -----------------------------------------------------------------
+
+class NodeOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    ipv4: str
+    hostname: str
+    port: int
+    environment: str  # "production" or "local"
+    created_at: datetime | None
+    last_started_at: datetime | None
+
+
 # ---- mail ------------------------------------------------------------------
 
 class Attachment(BaseModel):

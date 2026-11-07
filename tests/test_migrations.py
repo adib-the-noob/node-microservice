@@ -60,9 +60,10 @@ def test_fresh_db_gets_dkim_tables():
 
 
 def test_upgrade_is_safe_when_tables_already_exist():
-    """DBs where the app already made the tables with create_all."""
+    """DBs where the old app made its tables with create_all, and OpenDKIM's tables exist."""
     engine = create_engine("sqlite://")
-    Base.metadata.create_all(engine)
+    old = ["dkim_keys", "dkim_signing", "domains", "dns_records", "sent_mail"]
+    Base.metadata.create_all(engine, tables=[Base.metadata.tables[t] for t in old])
     with engine.begin() as conn:
         command.upgrade(_alembic(conn), "head")
-        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0002"
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0004"

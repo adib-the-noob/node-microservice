@@ -17,6 +17,7 @@ shell, an argument list only, and every input checked first.
 | `GET /domains` | list domains with their DNS records |
 | `GET /domains/{domain}` | one domain with its DNS records |
 | `GET /domains/{domain}/dns` | `dig +short TXT <fqdn>` for each record: is it published? |
+| `GET /nodes` | all registered nodes (`nodes` table) |
 | `GET /healthz` | `systemctl is-active postfix opendkim` + `SELECT 1` on the DB |
 
 Interactive docs: `http://<host>:8025/docs`.
@@ -120,6 +121,12 @@ and `sent_mail`, SELECT on `domains` / `dns_records`, and CREATE/ALTER for migra
   | TXT | `@` | `v=spf1 include:spf.metrovps.art ~all` (`SPF_RECORD`) |
   | TXT | `_dmarc` | `v=DMARC1; p=none; adkim=r; aspf=r` (`DMARC_RECORD`) |
   | TXT | `s1._domainkey` | `v=DKIM1; k=rsa; p=…` |
+- `nodes` (`id`, `ipv4` unique, `hostname`, `port`, `environment`, `created_at`, `last_started_at`): every node
+  registers itself at startup. It inserts its row, or updates it if that IPv4 is already there. The IPv4 is
+  the host's primary address (`ip -4 route get 1.1.1.1`). Behind NAT that's the private IP.
+  Startup fails if no IPv4 is found.
+  `environment` is `APP_ENV` from `.env`: `production` on mail servers (the default), `local` on a
+  developer PC. Filter with `GET /nodes?environment=production`.
 - `sent_mail`: made by migrations. There is one row per message sent through the API:
 
   | column | type |
@@ -164,6 +171,7 @@ Inside the container: `docker compose exec mail-sidecar alembic current`.
 | `app/schemas.py` | request/response bodies and their validation |
 | `app/models.py` | SQLAlchemy tables: `dkim_keys`, `dkim_signing`, `domains`, `dns_records`, `sent_mail` |
 | `app/db.py` | engine, session, `get_db` dependency |
+| `app/node.py` | self-registration in `nodes` at startup |
 | `app/mail.py` | building the MIME message, journal status lookup, DKIM key generation |
 | `app/utils.py` | `run()` for commands, `check()` and regexes for inputs |
 | `app/config.py` | settings from env, binary paths |

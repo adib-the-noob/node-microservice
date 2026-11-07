@@ -20,6 +20,13 @@ OPENSSL = "/usr/bin/openssl"
 DIG = "/usr/bin/dig"
 JOURNALCTL = "/usr/bin/journalctl"
 SYSTEMCTL = "/usr/bin/systemctl"
+IP = "/usr/sbin/ip"
+
+# Where this copy runs: "production" (a mail server) or "local" (a developer PC).
+# Stored on the node's row in the nodes table.
+APP_ENV = os.environ.get("APP_ENV", "production").strip().lower()
+if APP_ENV not in ("production", "local"):
+    raise RuntimeError(f"APP_ENV must be 'production' or 'local', not {APP_ENV!r}")
 
 # Only these From: domains may send (comma separated). Empty = any.
 ALLOWED_FROM_DOMAINS = [d.strip().lower() for d in os.environ.get("ALLOWED_FROM_DOMAINS", "").split(",") if d.strip()]

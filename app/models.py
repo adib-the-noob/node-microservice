@@ -69,6 +69,19 @@ class DnsRecord(Base):
         return self.domain.name if self.name == "@" else f"{self.name}.{self.domain.name}"
 
 
+class Node(Base):
+    """A mail VM running this app. Each node registers itself at startup, keyed by IPv4."""
+    __tablename__ = "nodes"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ipv4: Mapped[str] = mapped_column(String(15), unique=True)
+    hostname: Mapped[str] = mapped_column(String(255))
+    port: Mapped[int]  # API port
+    environment: Mapped[str] = mapped_column(String(20), server_default="production")  # APP_ENV
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, server_default=text("CURRENT_TIMESTAMP"))
+    last_started_at: Mapped[datetime] = mapped_column(TIMESTAMP, server_default=text("CURRENT_TIMESTAMP"))
+
+
 class SentMail(Base):
     """One row per message sent through POST /mail."""
     __tablename__ = "sent_mail"

@@ -14,8 +14,8 @@ from sqlalchemy.orm import Session
 from . import config
 from .db import get_db
 from .mail import build_message, delivery_status, make_dkim_key
-from .models import DkimKey, DkimSigning, DnsRecord, Domain, SentMail
-from .schemas import DnsCheck, DomainIn, DomainOut, MailIn, MailQueued
+from .models import DkimKey, DkimSigning, DnsRecord, Domain, Node, SentMail
+from .schemas import DnsCheck, DomainIn, DomainOut, MailIn, MailQueued, NodeOut
 from .utils import MESSAGE_ID, QUEUE_ID, check, run
 
 log = logging.getLogger("uvicorn.error")
@@ -36,6 +36,15 @@ def healthz(db: Session = Depends(get_db)):
     except SQLAlchemyError as exc:
         raise HTTPException(503, f"database: {exc}")
     return {"status": "ok"}
+
+
+@router.get("/nodes", response_model=list[NodeOut])
+def list_nodes(environment: str | None = None, db: Session = Depends(get_db)):
+    """Every node that has registered itself (at its last startup). Filter with ?environment=production."""
+    query = select(Node).order_by(Node.ipv4)
+    if environment:
+        query = query.where(Node.environment == environment)
+    return db.scalars(query).all()
 
 
 # ---- mail ------------------------------------------------------------------

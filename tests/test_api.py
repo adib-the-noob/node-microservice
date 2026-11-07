@@ -185,3 +185,29 @@ def test_add_domain_and_check_dns(env):
     checks = {c["fqdn"]: c["published"] for c in client.get("/domains/new.com/dns").json()}
     assert checks == {"new.com": True, "_dmarc.new.com": True, "s2._domainkey.new.com": False}
     assert client.get("/domains/nope.com/dns").status_code == 404
+
+
+def test_node_registers_itself_by_ipv4(env, tmp_path, monkeypatch):
+    client, _, db = env
+    from app import node
+
+    def ip_route(src):
+        monkeypatch.setattr(config, "IP", _script(tmp_path / "ip", f'echo "1.1.1.1 via 10.0.0.1 dev eth0 src {src} uid 0"\n'))
+
+    monkeypatch.setattr(node.socket, "gethostname", lambda: "mail-1")
+    ip_route("10.0.0.7")
+    node.register(db)
+    node.register(db)  # restart: same row, updated
+    assert [(n["ipv4"], n["hostname"], n["environment"]) for n in client.get("/nodes").json()] == [
+        ("10.0.0.7", "mail-1", "production")]
+
+    # a developer PC
+    monkeypatch.setattr(config, "APP_ENV", "local")
+    ip_route("192.168.1.20")
+    node.register(db)
+    assert [n["ipv4"] for n in client.get("/nodes?environment=local").json()] == ["192.168.1.20"]
+    assert [n["ipv4"] for n in client.get("/nodes?environment=production").json()] == ["10.0.0.7"]
+
+    ip_route("not-an-ip")
+    with pytest.raises(RuntimeError, match="could not find this node's IPv4"):
+        node.register(db)
