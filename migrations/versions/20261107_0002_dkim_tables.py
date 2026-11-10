@@ -16,7 +16,7 @@ down_revision = "0001"
 branch_labels = None
 depends_on = None
 
-MYSQL = {"mysql_engine": "InnoDB", "mysql_charset": "utf8mb4"}
+MARIADB = {"mariadb_engine": "InnoDB", "mariadb_charset": "utf8mb4"}
 
 
 def upgrade() -> None:
@@ -32,7 +32,7 @@ def upgrade() -> None:
             sa.Column("public_key", sa.Text(), nullable=False),      # PEM public key
             sa.Column("created_at", sa.TIMESTAMP(), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False),
             sa.UniqueConstraint("domain", "selector", name="uq_domain_selector"),
-            **MYSQL,
+            **MARIADB,
         )
     if "dkim_signing" not in existing:
         op.create_table(
@@ -40,7 +40,7 @@ def upgrade() -> None:
             sa.Column("author", sa.String(255), primary_key=True),  # unifyed.tech, @unifyed.tech, *@unifyed.tech
             sa.Column("key_id", sa.String(320), nullable=False),
             sa.ForeignKeyConstraint(["key_id"], ["dkim_keys.key_id"], name="fk_signing_key", ondelete="CASCADE"),
-            **MYSQL,
+            **MARIADB,
         )
         op.create_index("idx_key_id", "dkim_signing", ["key_id"])
 
