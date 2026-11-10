@@ -60,9 +60,8 @@ esac
     )
     for name, path in bins_.items():
         monkeypatch.setattr(config, name, path)
-    monkeypatch.setattr(config, "ALLOWED_FROM_DOMAINS", ["example.com"])
 
-    # in-memory SQLite stands in for the central MySQL DB
+    # in-memory SQLite stands in for the central MariaDB DB
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     Base.metadata.create_all(engine)
     db = Session(engine)
@@ -106,7 +105,6 @@ def test_send_mail_pipes_mime_to_sendmail(env):
 
 
 @pytest.mark.parametrize("patch, fragment", [
-    ({"from": "x@other.com"}, "not allowed"),
     ({"to": ["-oQ/tmp@x.org"]}, "invalid email"),
     ({"subject": "a\r\nBcc: evil@x.org"}, "line breaks"),
     ({"headers": {"From": "spoof@x.org"}}, "cannot be overridden"),

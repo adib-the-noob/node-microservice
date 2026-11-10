@@ -29,7 +29,6 @@ Interactive docs: `http://<host>:8025/docs`.
 OpenDKIM signs it with the key whose `dkim_signing.author` row matches the
 **From:** address. If the From: domain has no row, the mail goes out
 **unsigned**. `GET /mail/{id}` reports `dkim.signed` so you can see this.
-Set `ALLOWED_FROM_DOMAINS` to stop that from happening.
 
 ## Usage
 
@@ -98,9 +97,9 @@ on one interface only, use `"<private-ip>:8025:8025"` in `docker-compose.yml`.
 
 ## Database
 
-Every node uses the central MySQL DB that OpenDKIM reads (SQLAlchemy + PyMySQL, always TLS).
+Every node uses the central MariaDB DB that OpenDKIM reads (SQLAlchemy + PyMySQL).
 The app and alembic both connect with `DATABASE_URL` from `.env`, e.g.
-`mysql+pymysql://dkim_admin:PASSWORD@host:23356/defaultdb`. URL-encode special characters
+`mariadb+pymysql://dkim_admin:PASSWORD@host:3306/opendkim`. URL-encode special characters
 in the password (`@` → `%40`, `:` → `%3A`, `/` → `%2F`).
 The DB user needs INSERT on `dkim_keys`, `dkim_signing`, `domains`, `dns_records`
 and `sent_mail`, SELECT on `domains` / `dns_records`, and CREATE/ALTER for migrations, so use `dkim_admin`, not `opendkim_ro`.
@@ -143,7 +142,7 @@ and `sent_mail`, SELECT on `domains` / `dns_records`, and CREATE/ALTER for migra
 ## Migrations (Alembic)
 
 `docker compose up` and `run.sh` run `alembic upgrade head` before starting the
-app. Nodes take a MySQL lock (`GET_LOCK`) first, so when several start at once
+app. Nodes take a MariaDB lock (`GET_LOCK`) first, so when several start at once
 only one migrates at a time.
 
 Migrations only create `dkim_keys` / `dkim_signing` when they're missing (`0002`).
@@ -181,7 +180,7 @@ Inside the container: `docker compose exec mail-sidecar alembic current`.
 
 ```bash
 uv sync
-uv run pytest            # fake sendmail/postqueue/... scripts, SQLite instead of MySQL;
+uv run pytest            # fake sendmail/postqueue/... scripts, SQLite instead of MariaDB;
                          # also checks the migrations match app/models.py
 ./run.sh                 # needs a reachable DB (runs migrations first)
 ```

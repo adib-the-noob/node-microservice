@@ -28,14 +28,10 @@ APP_ENV = os.environ.get("APP_ENV", "production").strip().lower()
 if APP_ENV not in ("production", "local"):
     raise RuntimeError(f"APP_ENV must be 'production' or 'local', not {APP_ENV!r}")
 
-# Only these From: domains may send (comma separated). Empty = any.
-ALLOWED_FROM_DOMAINS = [d.strip().lower() for d in os.environ.get("ALLOWED_FROM_DOMAINS", "").split(",") if d.strip()]
-
 # DNS records every new domain must publish (besides its DKIM key)
 SPF_RECORD = os.environ.get("SPF_RECORD", "v=spf1 include:spf.metrovps.art ~all")
 DMARC_RECORD = os.environ.get("DMARC_RECORD", "v=DMARC1; p=none; adkim=r; aspf=r")
 
-# Central MySQL DB (the one OpenDKIM reads)
-# e.g. mysql+pymysql://user:password@host:3306/dbname (URL-encode special characters in the password)
+# Central MariaDB DB (the one OpenDKIM reads)
+# e.g. mariadb+pymysql://user:password@host:3306/dbname (URL-encode special characters in the password)
 DATABASE_URL = os.environ["DATABASE_URL"]
-DB_SSL_CA = os.environ.get("DB_SSL_CA", "")  # optional: check the server cert against this CA

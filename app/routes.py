@@ -53,10 +53,6 @@ def list_nodes(environment: str | None = None, db: Session = Depends(get_db)):
 def send_mail(req: MailIn, db: Session = Depends(get_db)):
     """Pipe the message to `sendmail`. Postfix pickup runs it through OpenDKIM,
     which signs it with the key matching the From: domain."""
-    domain = req.sender.split("@")[1]
-    if config.ALLOWED_FROM_DOMAINS and domain not in config.ALLOWED_FROM_DOMAINS:
-        raise HTTPException(422, f"sending as @{domain} is not allowed")
-
     msg = build_message(req)
     # -i: a lone "." line is not end-of-input.
     run(config.SENDMAIL, "-i", "-f", req.sender, *req.recipients, stdin=msg.as_bytes(policy=SMTP.clone(linesep="\n")))
